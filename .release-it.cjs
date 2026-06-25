@@ -1,7 +1,6 @@
 const DEFAULT_PREFIXES = {
   test: 'ignore',
   build: 'ignore',
-
   ci: 'patch',
   docs: 'patch',
   chore: 'minor',
@@ -9,9 +8,9 @@ const DEFAULT_PREFIXES = {
   fix: 'patch',
   perf: 'patch',
   refactor: 'patch',
-
   feat: 'minor',
   major: 'major',
+  breaking: 'major'
 }
 
 module.exports = {
@@ -32,7 +31,7 @@ module.exports = {
       "skipChecks": true
     },
     "hooks": {
-      "after:release": "echo ${version} > .release-version"
+      'after:release': "echo ${version} > .release-version"
     },
 
     
@@ -50,7 +49,16 @@ module.exports = {
             let breakings = 0
             let features = 0
             let levelSet = ['major','minor','patch','ignore']
-            let level = Math.min.apply(Math, commits.map(commit => {
+
+            // Handle empty commits array - return null to skip release
+            if (!commits || commits.length === 0) {
+              return {
+                level: null,
+                reason: 'No commits found - skipping release'
+              }
+            }
+
+            let levels = commits.map(commit => {
               let level = levelSet.indexOf(types[commit.type])
               level = level<0?3:level
               if (commit.notes.length > 0) {
@@ -60,7 +68,9 @@ module.exports = {
                 features += 1;
               }
               return level
-            }))
+            })
+
+            let level = Math.min.apply(Math, levels)
             return {
               level: level,
               reason: breakings === 1

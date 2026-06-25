@@ -14,6 +14,10 @@ inputs:
     description: 'Name of the publish workflow file to trigger (e.g., publish.yml)'
     required: false
     default: 'publish.yml'
+  commitSha:
+    description: 'Specific commit SHA to checkout (prevents race conditions during promotion)'
+    required: false
+    default: ''
 
 outputs:
   release_url:
@@ -27,8 +31,9 @@ runs:
   using: 'composite'
   steps:
     - name: Checkout Code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
+        ref: ${{ inputs.commitSha || github.sha }}
         fetch-depth: 0
         token: ${{ inputs.token }}
 
@@ -39,6 +44,15 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
       run: |
         VERSION="${{ inputs.version }}"
+
+        # A missing version is a real failure (e.g. calculate-version errored), not a
+        # silent no-op. Refuse rather than create an empty/garbage release.
+        if [ -z "$VERSION" ]; then
+          echo "❌ No version provided to create-release - refusing to create an empty release."
+          echo "   (Check the version/calculate-version step output.)"
+          exit 1
+        fi
+
         echo "📦 Creating GitHub release for $VERSION"
 
         # Generate release notes from commits since last tag
@@ -68,6 +82,15 @@ runs:
 
           echo "✅ Release created successfully"
           echo "🔗 URL: $RELEASE_URL"
+        elif echo "$RELEASE_OUTPUT" | grep -qiE 'already exists'; then
+          # Idempotent re-run: the release for this version already exists. Treat as
+          # success and surface the existing release's URL/ID instead of failing.
+          echo "ℹ️  Release $VERSION already exists - treating as success (idempotent)."
+          RELEASE_URL=$(gh release view "$VERSION" --json url --jq '.url' 2>/dev/null || echo "")
+          echo "release_url=$RELEASE_URL" >> $GITHUB_OUTPUT
+          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/$VERSION --jq '.id' 2>/dev/null || echo "")
+          echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+          echo "🔗 URL: $RELEASE_URL"
         else
           echo "❌ Failed to create release"
           echo "$RELEASE_OUTPUT"
@@ -86,9 +109,10 @@ runs:
         if [ -f ".github/workflows/$PUBLISH_WORKFLOW" ]; then
           echo "🔄 Triggering $PUBLISH_WORKFLOW for $VERSION"
 
-          # Trigger the publish workflow with the release tag
+          # Trigger the publish workflow with the release tag on main branch
           # This is necessary because GITHUB_TOKEN release creation doesn't trigger workflows
-          if gh workflow run "$PUBLISH_WORKFLOW" --field tag="$VERSION" 2>&1; then
+          # Explicitly use --ref main to ensure it runs on main, not the default branch (develop)
+          if gh workflow run "$PUBLISH_WORKFLOW" --ref main --field tag="$VERSION" 2>&1; then
             echo "✅ Publish workflow triggered for $VERSION"
           else
             echo "⚠️  Failed to trigger publish workflow, but continuing"
